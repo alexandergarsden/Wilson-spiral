@@ -51,9 +51,27 @@
         color: #1e601e; 
         font-weight: 700; 
     }
-    button { 
-        font-weight: 700; 
-        margin-top: 10px; /* Reduced */
+    
+    /* BUTTON STYLING */
+    .action-buttons {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+    }
+    .action-buttons button {
+        flex: 1;
+        margin: 0;
+        padding: 6px;
+        font-weight: 300; /* Light font for buttons */
+        background: #fafafa;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9em;
+    }
+    .action-buttons button:hover {
+        background-color: #eee;
+        border-color: #ccc;
     }
 
     /* FONT WEIGHT STYLES (LIGHT) */
@@ -66,8 +84,17 @@
         font-weight: 300; 
         color: #444;
     }
-    label span { font-weight: 300; }
-    select, input[type="text"] { font-weight: 300; }
+    label span { font-weight: 300; } /* Light font for values */
+    select, input[type="text"] {
+        font-weight: 300;
+        width: 100%;
+        padding: 6px;
+        margin-top: 4px;
+        margin-bottom: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        box-sizing: border-box;
+    }
     
     .checkbox-group {
         display: flex;
@@ -139,6 +166,30 @@
         <h2>Spiral Controls</h2>
         <label for="max-number-slider">Highest Harmonic: <span id="max-number-val">64</span></label>
         <input type="range" id="max-number-slider" min="8" max="128" step="1" value="64">
+        <div class="action-buttons">
+            <button onclick="hideAllSpirals()">Hide All Secondary Spirals</button>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <h2>Audio Controls</h2>
+        <label for="waveform-select">Waveform:</label>
+        <select id="waveform-select">
+            <option value="sine" selected>Sine</option>
+            <option value="square">Square</option>
+            <option value="triangle">Triangle</option>
+            <option value="sawtooth">Sawtooth</option>
+        </select>
+
+        <label for="filter-cutoff-slider">Filter Cutoff: <span id="filter-cutoff-val">5000</span> Hz</label>
+        <input type="range" id="filter-cutoff-slider" min="100" max="20000" step="10" value="5000">
+        
+        <label for="filter-q-slider">Filter Q: <span id="filter-q-val">1.0</span></label>
+        <input type="range" id="filter-q-slider" min="0.01" max="20" step="0.01" value="1.0">
+
+        <div class="action-buttons">
+            <button onclick="deactivateAll()">Stop All Sound</button>
+        </div>
     </div>
    
     <div class="control-group">
@@ -173,6 +224,10 @@
     let zoomLevel = 0.55;
     let pan = { x: 0, y: 0 };
     let maxNumber = 64;
+    
+    let waveformType = 'sine';
+    let filterCutoff = 5000;
+    let filterQ = 1.0;
 
     let hoveredNode = null;
     let hoveredSpiralToggle = null;
@@ -208,7 +263,7 @@
     const LABEL_Y_OFFSET = 25;
     const SPIRAL_DENSITY = 50;
     const SPIRAL_GROWTH_RATE = 1.5;
-    const SPIRAL_SEGMENTS_PER_OCTAVE = 80; // Increased for smoother main spiral
+    const SPIRAL_SEGMENTS_PER_OCTAVE = 80;
     const TOGGLE_BUTTON_RADIUS = 4;
     const TOGGLE_BUTTON_OFFSET = 25;
 
@@ -367,7 +422,7 @@
                         const startNode = seriesNodes[i];
                         const endNode = seriesNodes[i+1];
                        
-                        const segments = 40; // Increased for smoother secondary spirals
+                        const segments = 40;
                         for (let j = 1; j <= segments; j++) {
                             const t = j / segments;
                             const h_log = Math.log2(startNode.harmonic) + t * (Math.log2(endNode.harmonic) - Math.log2(startNode.harmonic));
@@ -375,13 +430,11 @@
 
                             const mainSpiralPoint = getSpiralCoords(h);
                            
-                            // Get the INWARD vector (towards center)
                             const vecX = centerX - mainSpiralPoint.x;
                             const vecY = centerY - mainSpiralPoint.y;
                             const vecLen = Math.sqrt(vecX * vecX + vecY * vecY);
 
                             if (vecLen > 0) {
-                                // Calculate displacement scale using a smooth sin curve (0 -> 1 -> 0)
                                 const displacementScale = Math.sin(t * Math.PI);
                                 const currentFlex = maxFlex * displacementScale;
 
@@ -397,7 +450,6 @@
                     ctx.lineWidth = 1.5;
                     ctx.stroke();
                 }
-
 
                 // Draw octave lines
                 ctx.strokeStyle = OCTAVE_LINE_COLOR;
@@ -490,16 +542,27 @@
         } else {
             const now = audioCtx.currentTime;
             const targetFreq = fundamental * node.harmonic;
+            
+            const source = audioCtx.createOscillator();
+            const filter = audioCtx.createBiquadFilter();
             const env = audioCtx.createGain();
+
+            source.type = waveformType;
+            source.frequency.setValueAtTime(targetFreq, now);
+
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(filterCutoff, now);
+            filter.Q.setValueAtTime(filterQ, now);
+
             env.connect(masterGain);
             env.gain.setValueAtTime(0, now);
             env.gain.linearRampToValueAtTime(1, now + attackTime);
-            const source = audioCtx.createOscillator();
-            source.type = 'sine';
-            source.frequency.setValueAtTime(targetFreq, now);
-            source.connect(env);
+            
+            source.connect(filter);
+            filter.connect(env);
+            
             source.start(now);
-            activeOscillators.set(key, { source, env });
+            activeOscillators.set(key, { source, env, filter });
             node.isActive = true;
         }
         drawLattice();
@@ -507,6 +570,11 @@
    
     window.deactivateAll=function(){
         nodes.forEach(n => { if(n.isActive) { deactivateNode(n) } });
+        drawLattice();
+    }
+
+    function hideAllSpirals() {
+        activeSecondarySpirals.clear();
         drawLattice();
     }
 
@@ -520,7 +588,6 @@
         let newHoveredSpiralToggle = null;
         let foundHover = false;
 
-        // Check for hover on spiral toggles first
         for (let n of nodes) {
             if (n.harmonic > 1) {
                 const [tx, ty] = [n.x, n.y - TOGGLE_BUTTON_OFFSET];
@@ -577,6 +644,31 @@
         drawLattice();
     });
 
+    document.getElementById('waveform-select').addEventListener('change', (e) => {
+        waveformType = e.target.value;
+        for (const [, { source }] of activeOscillators.entries()) {
+            source.type = waveformType;
+        }
+    });
+
+    document.getElementById('filter-cutoff-slider').addEventListener('input', (e) => {
+        filterCutoff = parseFloat(e.target.value);
+        document.getElementById('filter-cutoff-val').textContent = filterCutoff;
+        const now = audioCtx.currentTime;
+        for (const [, { filter }] of activeOscillators.entries()) {
+            filter.frequency.setTargetAtTime(filterCutoff, now, 0.01);
+        }
+    });
+
+    document.getElementById('filter-q-slider').addEventListener('input', (e) => {
+        filterQ = parseFloat(e.target.value);
+        document.getElementById('filter-q-val').textContent = filterQ.toFixed(2);
+        const now = audioCtx.currentTime;
+        for (const [, { filter }] of activeOscillators.entries()) {
+            filter.Q.setTargetAtTime(filterQ, now, 0.01);
+        }
+    });
+
     window.setFundamental=function(){
         const inputElement = document.getElementById('fundamental-input');
         const i = inputElement.value.trim();
@@ -608,16 +700,12 @@
         displayMode=e.target.value;
         const iE=document.getElementById('fundamental-input');
         const lE=document.getElementById('fundamental-label');
-        const pE = iE.nextElementSibling;
         if(displayMode==='hz'){
             lE.textContent='Fundamental (Hz):';
             iE.value=fundamental.toFixed(2);
-            pE.textContent = `*Pitch example: ${freqToPitchName(50)}`;
-
         } else {
             lE.textContent='Fundamental (Pitch + Cents):';
             iE.value=freqToPitchName(fundamental);
-            pE.textContent = `*Pitch example: ${freqToPitchName(50)}`;
         }
         drawLattice();
     });});
