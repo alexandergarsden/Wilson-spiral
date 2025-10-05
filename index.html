@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Erv's Spiral</title>
+  <style>
+    /* ------------------- BASE & LAYOUT ------------------- */
+    body { 
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
+        background: #f4f7f9; 
+        color: #333; 
+        position: relative; 
+        margin: 0;
+        padding-top: 80px; 
+        padding-right: 300px; 
+        overflow: hidden;
+    }
+    
+    #header {
+        position: fixed; 
+        top: 0;
+        left: 0;
+        right: 300px; 
+        background: #ffffff;
+        padding: 10px 20px;
+        border-bottom: 1px solid #ddd;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+        z-index: 1000;
+        box-sizing: border-box; 
+    }
+
+    #container { 
+        height: calc(100vh - 80px);
+        overflow: hidden;
+        position: relative;
+    }
+
+    canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        background: #fff;
+    }
+    
+    /* FONT WEIGHT STYLES (BOLD) */
+    h1 { font-size: 1.5em; margin: 0; font-weight: 700; }
+    h2 { 
+        font-size: 1.1em; 
+        margin-top: 0; 
+        margin-bottom: 8px; /* Reduced */
+        color: #1e601e; 
+        font-weight: 700; 
+    }
+    button { 
+        font-weight: 700; 
+        margin-top: 10px; /* Reduced */
+    }
+
+    /* FONT WEIGHT STYLES (LIGHT) */
+    #header p { margin: 5px 0 0 0; font-size: 0.9em; color: #555; font-weight: 300; }
+    .control-group p { font-weight: 300; font-size: 0.9em; margin: 5px 0 8px 0; }
+    label { 
+        display: block; 
+        margin-top: 8px; /* Reduced */
+        font-size: 0.9em; 
+        font-weight: 300; 
+        color: #444;
+    }
+    label span { font-weight: 300; }
+    select, input[type="text"] { font-weight: 300; }
+    
+    .checkbox-group {
+        display: flex;
+        flex-wrap: wrap; 
+        gap: 10px 15px; /* Reduced row gap */
+    }
+    .checkbox-group label { 
+        display: flex;
+        align-items: center;
+        margin-top: 0;
+        font-weight: 300; 
+        cursor: pointer;
+    }
+    .checkbox-group input[type="radio"] {
+        margin-right: 5px;
+    }
+
+    /* ------------------- CONTROL PANEL STYLING ------------------- */
+    #control-panel { 
+        position: fixed; 
+        top: 0;
+        right: 0;
+        width: 300px; 
+        padding: 20px; 
+        background: #ffffff;
+        height: 100vh; 
+        overflow-y: auto; 
+        box-shadow: -2px 0 8px rgba(0,0,0,0.1); 
+        z-index: 100;
+        box-sizing: border-box;
+    }
+
+    .control-group { 
+        margin-bottom: 15px; /* Reduced */
+        padding-bottom: 15px; /* Reduced */
+        border-bottom: 1px solid #eee;
+    }
+    .control-group:last-child { border-bottom: none; padding-bottom: 0; }
+    
+    input[type="range"] { 
+        width: 100%; 
+        margin: 5px 0; 
+        -webkit-appearance: none; appearance: none;
+        height: 4px; background: #ddd; border-radius: 2px;
+    }
+    
+  </style>
+</head>
+<body>
+ 
+  <div id="header">
+    <h1>Erv's Spiral</h1>
+    <p>An interactive html rendering of Erv Wilson's 'The harmonic series as a logarithmic spiral' (1965). Click on harmonics to activate them. Click on buttons above each harmonic to generate secondary spirals showing their harmonics. Control the number of harmonics, pitch display, and the fundamental using the control panel.</p>
+  </div>
+
+  <div id="container">
+    <canvas id="lattice"></canvas>
+  </div>
+
+  <div id="control-panel">
+   
+    <div class="control-group">
+        <h2>Lattice View</h2>
+        <label for="zoom-slider">Zoom Level: <span id="zoom-val">0.55</span>x</label>
+        <input type="range" id="zoom-slider" min="0.1" max="2.5" step="0.05" value="0.55">
+    </div>
+
+    <div class="control-group">
+        <h2>Spiral Controls</h2>
+        <label for="max-number-slider">Highest Harmonic: <span id="max-number-val">64</span></label>
+        <input type="range" id="max-number-slider" min="8" max="128" step="1" value="64">
+    </div>
+   
+    <div class="control-group">
+        <h2>Pitch Display</h2>
+        <div class="checkbox-group">
+            <label><input type="radio" name="pitch-display" value="hz" id="display-hz" checked> Hz</label>
+            <label><input type="radio" name="pitch-display" value="pitch" id="display-pitch"> Pitch Name (+ Cents)</label>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <h2>Fundamental</h2>
+        <label for="fundamental-input" id="fundamental-label">Fundamental (Hz):</label>
+        <input type="text" id="fundamental-input" value="50" onchange="setFundamental()">
+        <p>*Pitch example: G1 +2c</p>
+    </div>
+
+  </div>
+
+  <script>
+    /* 1. GLOBAL STATE & AUDIO SETUP */
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContext();
+    const masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.1;
+    masterGain.connect(audioCtx.destination);
+   
+    let fundamental = 50;
+    const attackTime = 0.5;
+    const releaseTime = 2.0;
+    let displayMode = 'hz'; 
+    let zoomLevel = 0.55;
+    let pan = { x: 0, y: 0 };
+    let maxNumber = 64;
+
+    let hoveredNode = null;
+    let hoveredSpiralToggle = null;
+    const activeSecondarySpirals = new Set();
+
+
+    /* 2. UTILITY FUNCTIONS */
+    function fractionLabel(n, d) { return String(n); }
+    function primeFactors(n){ const f=[]; let num=n; let d=2; while(num>1 && d<=num){ if(num%d===0){ f.push(d); num/=d; } else d++; } return f; }
+   
+    const PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const C4_FREQ = 261.625565;
+    function freqToPitchName(freq) {
+        if (freq <= 0) return "0 Hz"; 
+        const r=freq/C4_FREQ; const tS=12*Math.log2(r); const nS=Math.round(tS);
+        const pI=(nS % 12 + 12)%12; const o=4+Math.floor(nS/12); const eF=C4_FREQ*Math.pow(2,nS/12);
+        const c=1200*Math.log2(freq/eF); const pN=PITCH_NAMES[pI]+o; const cS=c.toFixed(0);
+        return `${pN} ${cS>=0?'+':''}${cS}c`;
+    }
+    function pitchNameToFreq(pS) {
+        const m=pS.match(/([A-G]#?)([0-9])\s*([+\-]\d+)c?/i); if(!m)return null; 
+        const[,n,oS,cS]=m; const o=parseInt(oS); const c=parseInt(cS); 
+        let pI=PITCH_NAMES.indexOf(n.toUpperCase()); if(pI===-1)return null;
+        const tI=(o*12)+pI-48; const eF=C4_FREQ*Math.pow(2,tI/12); 
+        return eF*Math.pow(2,c/1200);
+    }
+   
+    /* 3. LATTICE PARAMETERS & DATA */
+    const canvas = document.getElementById("lattice"); const ctx = canvas.getContext("2d");
+    const WORLD_SIZE = 6000;
+    const centerX = WORLD_SIZE / 2; const centerY = WORLD_SIZE / 2;
+    const NODE_RADIUS = 16;
+    const LABEL_Y_OFFSET = 25;
+    const SPIRAL_DENSITY = 50;
+    const SPIRAL_GROWTH_RATE = 1.5;
+    const SPIRAL_SEGMENTS_PER_OCTAVE = 80; // Increased for smoother main spiral
+    const TOGGLE_BUTTON_RADIUS = 4;
+    const TOGGLE_BUTTON_OFFSET = 25;
+
+    /* 4. NODE GENERATION */
+    let nodes = [];
+    let harmonicToNodeMap = new Map();
+
+    function getRadius(harmonic) {
+        if (harmonic <= 1) return 0;
+        const n = Math.log2(harmonic);
+        return SPIRAL_DENSITY * (Math.pow(SPIRAL_GROWTH_RATE, n) - 1) / (SPIRAL_GROWTH_RATE - 1);
+    }
+
+    function getSpiralCoords(harmonic) {
+        if (harmonic <= 0) return { x: centerX, y: centerY };
+        const n = Math.log2(harmonic);
+        const radius = getRadius(harmonic);
+        const angle = -n * (2 * Math.PI) + (Math.PI / 2);
+
+        const x = centerX + radius * Math.cos(angle);
+        const y = centerY - radius * Math.sin(angle);
+        return { x, y };
+    }
+   
+    function getGuideSpiralCoords(harmonic) {
+        if (harmonic <= 1) return getSpiralCoords(1);
+        const n = Math.log2(harmonic);
+        const angle = -n * (2 * Math.PI) + (Math.PI / 2);
+
+        const radiusH_half = getRadius(harmonic / 2);
+        const radiusH = getRadius(harmonic);
+        let guideRadius = (radiusH_half + radiusH) / 2;
+       
+        if (harmonic < 2) {
+            const t = harmonic - 1;
+            const startRadius = getRadius(1);
+            const endGuideRadius = (getRadius(2) + getRadius(1))/2;
+            guideRadius = startRadius + t * endGuideRadius;
+        }
+       
+        return { x: centerX + guideRadius * Math.cos(angle), y: centerY - guideRadius * Math.sin(angle) };
+    }
+
+
+    function generateLatticeNodes(nodesToPreserve = []) {
+        nodes = [];
+        harmonicToNodeMap.clear();
+       
+        const preservedMap = new Map();
+        nodesToPreserve.forEach(node => {
+            preservedMap.set(node.harmonic, node);
+        });
+
+        for (let i = 1; i <= maxNumber; i++) {
+            const { x, y } = getSpiralCoords(i);
+           
+            const preservedNode = preservedMap.get(i);
+            const newNode = {
+                harmonic: i,
+                ratio: [i, 1], x, y, 
+                isActive: preservedNode ? preservedNode.isActive : false
+            };
+            nodes.push(newNode);
+            harmonicToNodeMap.set(i, newNode);
+        }
+
+        nodes.sort((a, b) => a.harmonic - b.harmonic);
+    }
+
+    /* 5. CANVAS DRAWING AND INTERACTION LOGIC */
+    const RAINBOW_RANGE = [65, 127];
+    const HUE_RANGE = [0, 300];
+
+    function getNodeColor(harmonic) {
+        if ((harmonic & (harmonic - 1)) === 0 && harmonic !== 0) {
+            return {p: '#ccc', a: '#000'};
+        }
+
+        let refHarmonic = harmonic;
+        while (refHarmonic < RAINBOW_RANGE[0]) {
+            refHarmonic *= 2;
+        }
+
+        const normalized = (refHarmonic - RAINBOW_RANGE[0]) / (RAINBOW_RANGE[1] - RAINBOW_RANGE[0]);
+        const hue = HUE_RANGE[0] + (normalized * (HUE_RANGE[1] - HUE_RANGE[0]));
+       
+        const passiveColor = `hsl(${hue}, 60%, 80%)`;
+        const activeColor = `hsl(${hue}, 90%, 40%)`;
+
+        return {p: passiveColor, a: activeColor};
+    }
+   
+    const SPIRAL_PATH_COLOR = '#555';
+    const OCTAVE_LINE_COLOR = '#888';
+   
+    function drawLattice() {
+        requestAnimationFrame(() => {
+            try {
+                const dpr = window.devicePixelRatio || 1; const r = canvas.getBoundingClientRect();
+                ctx.clearRect(0,0,r.width*dpr,r.height*dpr); ctx.save(); ctx.scale(dpr,dpr); 
+                ctx.translate(r.width/2+pan.x, r.height/2+pan.y); ctx.scale(zoomLevel,zoomLevel); ctx.translate(-centerX,-centerY);
+               
+                // Draw main smooth spiral path
+                if (nodes.length > 1) {
+                    ctx.beginPath();
+                    const lastHarmonic = nodes[nodes.length - 1].harmonic;
+                    const totalOctaves = Math.log2(lastHarmonic);
+                    const totalSegments = Math.ceil(totalOctaves * SPIRAL_SEGMENTS_PER_OCTAVE);
+                    for (let i = 0; i <= totalSegments; i++) {
+                        const ratio = i / totalSegments;
+                        const harmonic = Math.pow(lastHarmonic, ratio);
+                        if (harmonic > 0) {
+                             const { x, y } = getSpiralCoords(harmonic);
+                            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                        }
+                    }
+                    ctx.strokeStyle = SPIRAL_PATH_COLOR;
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
+
+                // Draw secondary spirals with final procedural logic
+                for (const origin of activeSecondarySpirals) {
+                    const seriesNodes = [];
+                    for (let multiplier = 1; ; multiplier++) {
+                        const harmonic = origin * multiplier;
+                        if (harmonic > maxNumber) break;
+                        if (harmonicToNodeMap.has(harmonic)) {
+                            seriesNodes.push(harmonicToNodeMap.get(harmonic));
+                        }
+                    }
+                    if (seriesNodes.length < 2) continue;
+                   
+                    let spiralHue;
+                    if (!((origin & (origin - 1)) === 0 && origin !== 0)) {
+                         let refHarmonic = origin;
+                         while (refHarmonic < RAINBOW_RANGE[0]) refHarmonic *= 2;
+                         const normalized = (refHarmonic - RAINBOW_RANGE[0]) / (RAINBOW_RANGE[1] - RAINBOW_RANGE[0]);
+                         spiralHue = HUE_RANGE[0] + (normalized * (HUE_RANGE[1] - HUE_RANGE[0]));
+                    }
+                    const spiralColor = spiralHue !== undefined ? `hsl(${spiralHue}, 60%, 90%)` : OCTAVE_LINE_COLOR;
+
+                    // Calculate the max flex distance D based on the first segment's zenith
+                    let maxFlex = 0;
+                    const zenithH_first = origin * (5 / 3);
+                    if (zenithH_first <= maxNumber) {
+                        const mainPoint = getSpiralCoords(zenithH_first);
+                        const guidePoint = getGuideSpiralCoords(zenithH_first);
+                        maxFlex = Math.sqrt(Math.pow(guidePoint.x - mainPoint.x, 2) + Math.pow(guidePoint.y - mainPoint.y, 2));
+                    }
+
+                    // Draw all segments
+                    ctx.beginPath();
+                    ctx.moveTo(seriesNodes[0].x, seriesNodes[0].y);
+                    for (let i = 0; i < seriesNodes.length - 1; i++) {
+                        const startNode = seriesNodes[i];
+                        const endNode = seriesNodes[i+1];
+                       
+                        const segments = 40; // Increased for smoother secondary spirals
+                        for (let j = 1; j <= segments; j++) {
+                            const t = j / segments;
+                            const h_log = Math.log2(startNode.harmonic) + t * (Math.log2(endNode.harmonic) - Math.log2(startNode.harmonic));
+                            const h = Math.pow(2, h_log);
+
+                            const mainSpiralPoint = getSpiralCoords(h);
+                           
+                            // Get the INWARD vector (towards center)
+                            const vecX = centerX - mainSpiralPoint.x;
+                            const vecY = centerY - mainSpiralPoint.y;
+                            const vecLen = Math.sqrt(vecX * vecX + vecY * vecY);
+
+                            if (vecLen > 0) {
+                                // Calculate displacement scale using a smooth sin curve (0 -> 1 -> 0)
+                                const displacementScale = Math.sin(t * Math.PI);
+                                const currentFlex = maxFlex * displacementScale;
+
+                                const finalX = mainSpiralPoint.x + (vecX / vecLen) * currentFlex;
+                                const finalY = mainSpiralPoint.y + (vecY / vecLen) * currentFlex;
+                                ctx.lineTo(finalX, finalY);
+                            } else {
+                                 ctx.lineTo(mainSpiralPoint.x, mainSpiralPoint.y);
+                            }
+                        }
+                    }
+                    ctx.strokeStyle = spiralColor;
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
+
+
+                // Draw octave lines
+                ctx.strokeStyle = OCTAVE_LINE_COLOR;
+                ctx.lineWidth = 0.75;
+                for (const nodeA of nodes) {
+                    const targetHarmonic = nodeA.harmonic * 2;
+                    if (harmonicToNodeMap.has(targetHarmonic)) {
+                        const nodeB = harmonicToNodeMap.get(targetHarmonic);
+                        ctx.beginPath();
+                        ctx.moveTo(nodeA.x, nodeA.y);
+                        ctx.lineTo(nodeB.x, nodeB.y);
+                        ctx.stroke();
+                    }
+                }
+               
+                // Draw nodes and their UI elements
+                for(const n of nodes){
+                    const colorScheme = getNodeColor(n.harmonic);
+                    ctx.beginPath(); ctx.arc(n.x,n.y,NODE_RADIUS,0,2*Math.PI);
+                    ctx.fillStyle = n.isActive ? colorScheme.a : colorScheme.p; ctx.fill();
+                    ctx.strokeStyle = n.isActive ? '#000' : '#333'; ctx.lineWidth= n.isActive ? 2.5 : 1.5; ctx.stroke();
+                   
+                    const fText = String(n.harmonic);
+                    let fSize = 10;
+                    const availableWidth = NODE_RADIUS * 1.8;
+                    ctx.font=`bold ${fSize}px "Helvetica Neue"`;
+                    let textWidth = ctx.measureText(fText).width;
+                    while(textWidth > availableWidth && fSize > 4){
+                        fSize--;
+                        ctx.font=`bold ${fSize}px "Helvetica Neue"`;
+                        textWidth = ctx.measureText(fText).width;
+                    }
+                    ctx.fillStyle = n.isActive ? 'white' : 'black';
+                    ctx.textAlign='center';
+                    ctx.textBaseline='middle';
+                    ctx.fillText(fText,n.x,n.y);
+
+                    // Draw spiral toggle button for any harmonic > 1
+                    if (n.harmonic > 1) {
+                        const [tx, ty] = [n.x, n.y - TOGGLE_BUTTON_OFFSET];
+                        ctx.beginPath();
+                        ctx.arc(tx, ty, TOGGLE_BUTTON_RADIUS, 0, 2 * Math.PI);
+                        ctx.fillStyle = activeSecondarySpirals.has(n.harmonic) ? '#333' : '#fff';
+                        ctx.strokeStyle = (hoveredSpiralToggle === n.harmonic) ? '#000' : '#888';
+                        ctx.lineWidth = 1.5;
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                   
+                    ctx.fillStyle = '#333';
+                    ctx.font = '10px "Helvetica Neue"';
+                    let labelText;
+                    if (hoveredNode === n) {
+                         const factors = primeFactors(n.harmonic).filter(p=>p>2);
+                         labelText = 'Primes = ' + (factors.length > 0 ? factors.sort((a,b)=>a-b).join('·') : '1');
+                    } else {
+                        const baseFreq = fundamental * n.harmonic;
+                        labelText = displayMode === 'hz' ? `${baseFreq.toFixed(1)}Hz` : freqToPitchName(baseFreq);
+                    }
+                    ctx.fillText(labelText, n.x, n.y + LABEL_Y_OFFSET);
+                }
+                ctx.restore();
+            } catch (e) {
+                console.error("Error during drawing:", e);
+            }
+        });
+    }
+
+    /* --- AUDIO & STATE LOGIC --- */
+    let activeOscillators = new Map();
+
+    function deactivateNode(node) {
+        const key = node.harmonic;
+        if (activeOscillators.has(key)) {
+            const { source, env } = activeOscillators.get(key);
+            const now = audioCtx.currentTime;
+            env.gain.cancelScheduledValues(now);
+            env.gain.setValueAtTime(env.gain.value, now);
+            env.gain.linearRampToValueAtTime(0, now + releaseTime);
+            source.stop(now + releaseTime + 0.1);
+            activeOscillators.delete(key);
+            node.isActive = false;
+        }
+    }
+   
+    function toggleNodeSound(node){
+        const key = node.harmonic;
+        if (activeOscillators.has(key)) {
+            deactivateNode(node);
+        } else {
+            const now = audioCtx.currentTime;
+            const targetFreq = fundamental * node.harmonic;
+            const env = audioCtx.createGain();
+            env.connect(masterGain);
+            env.gain.setValueAtTime(0, now);
+            env.gain.linearRampToValueAtTime(1, now + attackTime);
+            const source = audioCtx.createOscillator();
+            source.type = 'sine';
+            source.frequency.setValueAtTime(targetFreq, now);
+            source.connect(env);
+            source.start(now);
+            activeOscillators.set(key, { source, env });
+            node.isActive = true;
+        }
+        drawLattice();
+    }
+   
+    window.deactivateAll=function(){
+        nodes.forEach(n => { if(n.isActive) { deactivateNode(n) } });
+        drawLattice();
+    }
+
+    /* --- EVENT HANDLERS --- */
+    function resizeCanvas(){const c=document.getElementById('container');const dpr=window.devicePixelRatio||1;const r=c.getBoundingClientRect();canvas.width=r.width*dpr;canvas.height=r.height*dpr;canvas.style.width=`${r.width}px`;canvas.style.height=`${r.height}px`;drawLattice();}
+    function getMouseWorldPos(e){const r=canvas.getBoundingClientRect();const mX=e.clientX-r.left;const mY=e.clientY-r.top;const wX=(mX-r.width/2-pan.x)/zoomLevel+centerX;const wY=(mY-r.height/2-pan.y)/zoomLevel+centerY;return{worldX:wX,worldY:wY};}
+   
+    canvas.addEventListener('mousemove', (e) => {
+        const { worldX, worldY } = getMouseWorldPos(e);
+        let newHoveredNode = null;
+        let newHoveredSpiralToggle = null;
+        let foundHover = false;
+
+        // Check for hover on spiral toggles first
+        for (let n of nodes) {
+            if (n.harmonic > 1) {
+                const [tx, ty] = [n.x, n.y - TOGGLE_BUTTON_OFFSET];
+                const dist_sq = (worldX - tx) * (worldX - tx) + (worldY - ty) * (worldY - ty);
+                if (dist_sq < (TOGGLE_BUTTON_RADIUS + 4) * (TOGGLE_BUTTON_RADIUS + 4)) {
+                    newHoveredSpiralToggle = n.harmonic;
+                    foundHover = true;
+                    break;
+                }
+            }
+        }
+
+        if (!foundHover) {
+            let min_dist_sq = (NODE_RADIUS + 2) * (NODE_RADIUS + 2);
+            for (let n of nodes) {
+                const dist_sq = (worldX - n.x) * (worldX - n.x) + (worldY - n.y) * (worldY - n.y);
+                if (dist_sq < min_dist_sq) {
+                    newHoveredNode = n;
+                    min_dist_sq = dist_sq;
+                }
+            }
+            if (min_dist_sq > NODE_RADIUS * NODE_RADIUS) newHoveredNode = null;
+        }
+
+        canvas.style.cursor = (newHoveredNode || newHoveredSpiralToggle) ? 'pointer' : 'default';
+        if (hoveredNode !== newHoveredNode || hoveredSpiralToggle !== newHoveredSpiralToggle) {
+            hoveredNode = newHoveredNode;
+            hoveredSpiralToggle = newHoveredSpiralToggle;
+            drawLattice();
+        }
+    });
+
+    canvas.addEventListener('click',(e)=>{
+        if (hoveredSpiralToggle) {
+            if (activeSecondarySpirals.has(hoveredSpiralToggle)) {
+                activeSecondarySpirals.delete(hoveredSpiralToggle);
+            } else {
+                activeSecondarySpirals.add(hoveredSpiralToggle);
+            }
+            drawLattice();
+        } else if (hoveredNode) {
+            toggleNodeSound(hoveredNode);
+        }
+    });
+
+    canvas.addEventListener('wheel',(e)=>{e.preventDefault();pan.x-=e.deltaX;pan.y-=e.deltaY;drawLattice();});
+   
+    document.getElementById('zoom-slider').addEventListener('input',(e)=>{zoomLevel=parseFloat(e.target.value);document.getElementById('zoom-val').textContent=zoomLevel.toFixed(2);drawLattice();});
+    document.getElementById('max-number-slider').addEventListener('input',(e)=>{
+        maxNumber=parseInt(e.target.value);
+        document.getElementById('max-number-val').textContent=maxNumber;
+        const activeNodes = nodes.filter(n => n.isActive);
+        generateLatticeNodes(activeNodes);
+        drawLattice();
+    });
+
+    window.setFundamental=function(){
+        const inputElement = document.getElementById('fundamental-input');
+        const i = inputElement.value.trim();
+        let nF=0;
+        if(displayMode==='hz') {
+            nF=parseFloat(i);
+        } else {
+            nF=pitchNameToFreq(i);
+        }
+        if (nF>0){
+            fundamental=nF;
+            if(displayMode==='pitch') {
+                inputElement.value=freqToPitchName(fundamental);
+            } else {
+                inputElement.value=fundamental.toFixed(2);
+            }
+            deactivateAll();
+            drawLattice();
+        } else {
+            alert(`Invalid format for ${displayMode==='hz'?'Frequency (Hz)':'Pitch Name (+ Cents)'}. Example: 50 or G1 +2c.`);
+            if(displayMode==='hz') {
+                inputElement.value=fundamental.toFixed(2);
+            } else {
+                inputElement.value=freqToPitchName(fundamental);
+            }
+        }
+    };
+    document.querySelectorAll('input[name="pitch-display"]').forEach(r=>{r.addEventListener('change',(e)=>{
+        displayMode=e.target.value;
+        const iE=document.getElementById('fundamental-input');
+        const lE=document.getElementById('fundamental-label');
+        const pE = iE.nextElementSibling;
+        if(displayMode==='hz'){
+            lE.textContent='Fundamental (Hz):';
+            iE.value=fundamental.toFixed(2);
+            pE.textContent = `*Pitch example: ${freqToPitchName(50)}`;
+
+        } else {
+            lE.textContent='Fundamental (Pitch + Cents):';
+            iE.value=freqToPitchName(fundamental);
+            pE.textContent = `*Pitch example: ${freqToPitchName(50)}`;
+        }
+        drawLattice();
+    });});
+   
+    document.addEventListener('DOMContentLoaded', () => {
+        const fundamentalInput = document.getElementById('fundamental-input');
+        if (displayMode === 'hz') {
+            fundamentalInput.value = fundamental.toFixed(2);
+        } else {
+            fundamentalInput.value = freqToPitchName(fundamental);
+        }
+        fundamentalInput.nextElementSibling.textContent = `*Pitch example: ${freqToPitchName(50)}`;
+    });
+
+
+    // --- Initial setup calls ---
+    window.addEventListener('resize', resizeCanvas); 
+    generateLatticeNodes();
+    resizeCanvas();
+
+  </script>
+</body>
+</html>
